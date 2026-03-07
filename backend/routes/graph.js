@@ -1,5 +1,6 @@
 import { getSession } from '../neo4j/driver.js';
 import { neo4jToCytoscape } from '../services/graph-transform.js';
+import { bulkRiskScores } from '../services/detection.js';
 
 export default async function graphRoutes(fastify) {
   fastify.get('/graph', async (request, reply) => {
@@ -42,6 +43,20 @@ export default async function graphRoutes(fastify) {
 
       const result = await session.run(cypher, params);
       const elements = neo4jToCytoscape(result.records);
+
+      // Attach risk scores to every wallet node in a single query
+      const walletAddresses = elements.nodes
+        .filter((n) => n.data.nodeType === 'Wallet')
+        .map((n) => n.data.label);
+
+      if (walletAddresses.length > 0) {
+        const scores = await bulkRiskScores(walletAddresses, session);
+        for (const node of elements.nodes) {
+          if (node.data.nodeType === 'Wallet') {
+            node.data.riskScore = scores[node.data.label] ?? 0;
+          }
+        }
+      }
 
       // Get total counts for context
       const countResult = await session.run(

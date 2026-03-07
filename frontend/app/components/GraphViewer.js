@@ -9,23 +9,37 @@ if (typeof window !== "undefined") {
   cytoscape.use(cola);
 }
 
+// Map risk score (0-100) to a color from green → yellow → red
+function riskColor(score, lightness = 50) {
+  const s = Math.max(0, Math.min(100, score || 0));
+  // Hue: 120° (green) → 60° (yellow) → 0° (red)
+  const hue = Math.round(120 * (1 - s / 100));
+  return `hsl(${hue}, 90%, ${lightness}%)`;
+}
+
 const DEFAULT_STYLE = [
   {
     selector: "node[nodeType='Wallet']",
     style: {
-      label: "data(label)",
+      label: (ele) => {
+        const risk = ele.data("riskScore");
+        const addr = ele.data("label") || ele.data("id");
+        const short = addr.length > 10 ? addr.slice(0, 10) + "…" : addr;
+        return risk != null ? `${short}\n⚠ ${risk}` : short;
+      },
       "text-valign": "bottom",
       "text-halign": "center",
       "font-size": "9px",
       color: "#a1a1aa",
       "text-margin-y": 6,
-      "text-max-width": "80px",
+      "text-max-width": "100px",
+      "text-wrap": "wrap",
       "text-overflow-wrap": "ellipsis",
-      "background-color": "#6366f1",
+      "background-color": (ele) => riskColor(ele.data("riskScore") || 0),
       width: 30,
       height: 30,
       "border-width": 2,
-      "border-color": "#4f46e5",
+      "border-color": (ele) => riskColor(ele.data("riskScore") || 0, 35),
     },
   },
   {
@@ -194,7 +208,7 @@ export default function GraphViewer({
           ? {
               name: "cola",
               animate: true,
-              maxSimulationTime: 3000,
+              maxSimulationTime: 500,
               nodeSpacing: 40,
               edgeLength: 120,
               randomize: true,

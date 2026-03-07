@@ -205,3 +205,42 @@ function toNum(val) {
   if (typeof val === 'object' && typeof val.toNumber === 'function') return val.toNumber();
   return Number(val) || 0;
 }
+
+// Compute risk scores for multiple addresses in a single Cypher UNWIND query.
+// Accepts an optional already-open session so the caller controls its lifecycle.
+export async function bulkRiskScores(addresses, existingSession) {
+  const session = existingSession || getSession();
+  const owned = !existingSession;
+  try {
+    const result = await session.run(
+      `UNWIND $addresses AS addr
+       MATCH (w:Wallet {address: addr})
+       OPTIONAL MATCH (w)-[out:TRANSFER]->()
+       WITH w, addr, count(out) AS outDeg
+       OPTIONAL MATCH ()-[inr:TRANSFER]->(w)
+       WITH w, addr, outDeg, count(inr) AS inDeg
+       OPTIONAL MATCH (w)-[:TRANSFER*2..4]->(w)
+       WITH addr, outDeg, inDeg, count(*) AS cycles
+       WITH addr, outDeg, inDeg, cycles,
+            CASE WHEN outDeg * 5 < 25 THEN outDeg * 5 ELSE 25 END AS foScore,
+            CASE WHEN inDeg * 5 < 25 THEN inDeg * 5 ELSE 25 END AS fiScore,
+            CASE WHEN cycles * 15 < 30 THEN cycles * 15 ELSE 30 END AS cycleScore,
+            CASE WHEN (outDeg + inDeg) * 2 < 20 THEN (outDeg + inDeg) * 2 ELSE 20 END AS degScore
+       WITH addr, foScore + fiScore + cycleScore + degScore AS rawScore
+       RETURN addr,
+              CASE WHEN rawScore < 100 THEN rawScore ELSE 100 END AS score`,
+      { addresses }
+    );
+
+    const map = {};
+    for (const rec of result.records) {
+      map[rec.get('addr')] = toNum(rec.get('score'));
+    }
+    for (const addr of addresses) {
+      if (!(addr in map)) map[addr] = 0;
+    }
+    return map;
+  } finally {
+    if (owned) await session.close();
+  }
+}
