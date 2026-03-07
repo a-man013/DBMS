@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import cytoscape from "cytoscape";
 import cola from "cytoscape-cola";
 
@@ -116,6 +116,13 @@ export default function GraphViewer({
 }) {
   const containerRef = useRef(null);
   const cyRef = useRef(null);
+  const [zoomSpeed, setZoomSpeed] = useState(0.3);
+  const zoomSpeedRef = useRef(zoomSpeed);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    zoomSpeedRef.current = zoomSpeed;
+  }, [zoomSpeed]);
 
   const handleNodeClick = useCallback(
     (e) => {
@@ -137,13 +144,32 @@ export default function GraphViewer({
       layout: { name: "grid" },
       minZoom: 0.1,
       maxZoom: 5,
-      wheelSensitivity: 0.3,
+      userZoomingEnabled: false,
     });
+
+    // Custom wheel zoom using zoomSpeed ref
+    const container = containerRef.current;
+    const handleWheel = (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -1 : 1;
+      const factor = Math.pow(1.04, delta * zoomSpeedRef.current * 10);
+      const rect = container.getBoundingClientRect();
+      const pos = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+      cy.zoom({
+        level: cy.zoom() * factor,
+        renderedPosition: pos,
+      });
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
 
     cyRef.current = cy;
     cy.on("tap", "node", handleNodeClick);
 
     return () => {
+      container.removeEventListener("wheel", handleWheel);
       cy.destroy();
       cyRef.current = null;
     };
@@ -224,10 +250,25 @@ export default function GraphViewer({
   }, [highlightedNodes, highlightPath]);
 
   return (
-    <div
-      ref={containerRef}
-      className="graph-container"
-      style={style}
-    />
+    <div className="relative" style={style}>
+      <div
+        ref={containerRef}
+        className="graph-container"
+        style={{ width: "100%", height: "100%" }}
+      />
+      <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-lg border border-card-border bg-card/90 px-3 py-2 backdrop-blur-sm">
+        <span className="text-[10px] text-muted">Zoom</span>
+        <input
+          type="range"
+          min="0.05"
+          max="1"
+          step="0.05"
+          value={zoomSpeed}
+          onChange={(e) => setZoomSpeed(parseFloat(e.target.value))}
+          className="h-1 w-20 cursor-pointer accent-accent"
+        />
+        <span className="w-7 text-right text-[10px] font-mono text-muted">{zoomSpeed.toFixed(2)}</span>
+      </div>
+    </div>
   );
 }

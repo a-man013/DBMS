@@ -9,12 +9,11 @@ const INGEST_CYPHER = `
   MERGE (c:Coin {name: tx.coin_type})
   MERGE (from)-[:USES]->(c)
   MERGE (to)-[:USES]->(c)
-  CREATE (from)-[:TRANSFER {
-    amount: toFloat(tx.amount),
-    timestamp: tx.timestamp,
-    coin_type: tx.coin_type,
-    txid: tx.transaction_id
-  }]->(to)
+  MERGE (from)-[t:TRANSFER {txid: tx.transaction_id}]->(to)
+  ON CREATE SET
+    t.amount = toFloat(tx.amount),
+    t.timestamp = tx.timestamp,
+    t.coin_type = tx.coin_type
   RETURN count(*) AS created
 `;
 
