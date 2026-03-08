@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Filter, Route, AlertCircle, Box, Grid2x2, Palette, Timer } from "lucide-react";
+import { Filter, Route, AlertCircle, Box, Grid2x2, Palette, Timer, Crosshair } from "lucide-react";
 import GraphViewer from "../components/GraphViewer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { getGraph, getTransactionPath } from "@/lib/api";
@@ -36,6 +36,7 @@ export default function GraphExplorerPage() {
   const [volumeThreshold, setVolumeThreshold] = useState(0);
   const [colorMode, setColorMode] = useState("risk"); // "risk" | "cluster"
   const [animateTime, setAnimateTime] = useState(false);
+  const [layoutMode, setLayoutMode] = useState("force"); // "force" | "fraud"
 
   // Path finder
   const [pathFrom, setPathFrom] = useState("");
@@ -211,6 +212,23 @@ export default function GraphExplorerPage() {
               </button>
             </div>
           )}
+
+          {/* Layout mode toggle (3D mode) */}
+          {viewMode === "3d" && (
+            <div className="flex items-center gap-1.5 border-l border-card-border pl-2">
+              <Crosshair size={12} className="text-muted" />
+              <button
+                onClick={() => setLayoutMode(layoutMode === "force" ? "fraud" : "force")}
+                className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  layoutMode === "fraud"
+                    ? "border-warning bg-warning/20 text-warning"
+                    : "border-card-border bg-background text-muted hover:text-foreground"
+                }`}
+              >
+                {layoutMode === "fraud" ? "⚠ Fraud Layout" : "Force Layout"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -272,6 +290,7 @@ export default function GraphExplorerPage() {
               volumeThreshold={volumeThreshold}
               colorMode={colorMode}
               animateTime={animateTime}
+              layoutMode={layoutMode}
               style={{ width: "100%", height: "100%" }}
             />
           ) : (
