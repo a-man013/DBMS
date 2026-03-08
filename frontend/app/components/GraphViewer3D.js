@@ -202,17 +202,37 @@ export default function GraphViewer3D({
   highlightedNodes = [],
   highlightPath = [],
   volumeThreshold = 0,
-  colorMode = "risk",      // "risk" | "cluster"
+  colorMode = "risk",          // "risk" | "cluster"
   animateTime = false,
-  layoutMode = "force",     // "force" | "fraud"
+  layoutMode = "force",        // "force" | "fraud"
+  reduceAnimations = false,
+  vizSettings = {},
   style,
 }) {
   const containerRef = useRef(null);
   const graphRef = useRef(null);
   const animFrameRef = useRef(null);
   const orbitRef = useRef(null);
+  const wasdFrameRef = useRef(null);
   const sceneExtrasRef = useRef([]); // track added scene objects for cleanup
+  const keysRef = useRef(new Set());
+  const cameraStateRef = useRef(null); // preserve camera across graph recreation
   const [ForceGraph3DModule, setForceGraph3DModule] = useState(null);
+
+  // ── Merged visual settings with defaults ──
+  const settings = useMemo(() => ({
+    fogDensity: vizSettings.fogDensity ?? 0.0015,
+    particleSpeed: vizSettings.particleSpeed ?? 0.003,
+    glowIntensity: vizSettings.glowIntensity ?? 1.0,
+    particleCount: vizSettings.particleCount ?? 4,
+    orbitSpeed: vizSettings.orbitSpeed ?? 0.0008,
+  }), [
+    vizSettings.fogDensity,
+    vizSettings.particleSpeed,
+    vizSettings.glowIntensity,
+    vizSettings.particleCount,
+    vizSettings.orbitSpeed,
+  ]);
 
   // Dynamically import 3d-force-graph
   useEffect(() => {
@@ -297,7 +317,7 @@ export default function GraphViewer3D({
         color,
         isHighlighted,
         isOnPath,
-        fz: normVol * 120 - 60,
+        fz: normVol * 300 - 150,
         nodeSize,
         glowIntensity: normVol,
       };
@@ -337,8 +357,12 @@ export default function GraphViewer3D({
 
     const container = containerRef.current;
 
-    // Destroy previous instance
+    // ── Save camera position before destroying ──
     if (graphRef.current) {
+      try {
+        const pos = graphRef.current.cameraPosition();
+        if (pos) cameraStateRef.current = pos;
+      } catch (_) { /* ignore */ }
       graphRef.current._destructor?.();
       graphRef.current = null;
       while (container.firstChild) container.removeChild(container.firstChild);
@@ -350,6 +374,10 @@ export default function GraphViewer3D({
     if (orbitRef.current) {
       cancelAnimationFrame(orbitRef.current);
       orbitRef.current = null;
+    }
+    if (wasdFrameRef.current) {
+      cancelAnimationFrame(wasdFrameRef.current);
+      wasdFrameRef.current = null;
     }
     sceneExtrasRef.current = [];
 
@@ -372,6 +400,10 @@ export default function GraphViewer3D({
         delete node.fy;
       }
     }
+
+    // ── Capture settings in closure ──
+    const _reduceAnim = reduceAnimations;
+    const _settings = settings;
 
     const Graph = ForceGraph3DModule()(container)
       .backgroundColor("#050816")
@@ -403,23 +435,30 @@ export default function GraphViewer3D({
         });
         const sphere = new T.Mesh(geo, mat);
 
-        // Glow sprite — scaled by volume
-        const glowScale = 1 + node.normalizedVolume * 3;
-        const canvas = createGlowTexture(node.color, node.glowIntensity);
-        const tex = new T.CanvasTexture(canvas);
-        const spriteMat = new T.SpriteMaterial({
-          map: tex,
-          transparent: true,
-          blending: T.AdditiveBlending,
-          depthWrite: false,
-        });
-        const sprite = new T.Sprite(spriteMat);
-        sprite.scale.set(s * 2.2 * glowScale, s * 2.2 * glowScale, 1);
+        // Glow sprite — skip if animations are reduced or intensity is 0
+        if (!_reduceAnim && _settings.glowIntensity > 0) {
+          const glowScale = 1 + node.normalizedVolume * 3 * _settings.glowIntensity;
+          const canvas = createGlowTexture(
+            node.color,
+            node.glowIntensity * _settings.glowIntensity
+          );
+          const tex = new T.CanvasTexture(canvas);
+          const spriteMat = new T.SpriteMaterial({
+            map: tex,
+            transparent: true,
+            blending: T.AdditiveBlending,
+            depthWrite: false,
+          });
+          const sprite = new T.Sprite(spriteMat);
+          sprite.scale.set(s * 2.2 * glowScale, s * 2.2 * glowScale, 1);
 
-        const group = new T.Group();
-        group.add(sphere);
-        group.add(sprite);
-        return group;
+          const group = new T.Group();
+          group.add(sphere);
+          group.add(sprite);
+          return group;
+        }
+
+        return sphere;
       })
       .nodeLabel((node) => {
         const addr =
@@ -449,9 +488,9 @@ export default function GraphViewer3D({
       .linkColor((link) => link.color)
       .linkWidth((link) => link.width)
       .linkOpacity(0.55)
-      .linkDirectionalParticles(4)
+      .linkDirectionalParticles(_reduceAnim ? 0 : _settings.particleCount)
       .linkDirectionalParticleWidth(2)
-      .linkDirectionalParticleSpeed(0.003)
+      .linkDirectionalParticleSpeed(_settings.particleSpeed)
       .linkDirectionalParticleColor((link) =>
         link.isPathEdge ? "#f59e0b" : "rgba(140, 160, 210, 0.5)"
       )
@@ -473,15 +512,15 @@ export default function GraphViewer3D({
       });
 
     // ── Improved physics forces ──
-    Graph.d3Force("charge").strength(-80);
-    Graph.d3Force("link").distance(50).strength(0.6);
+    Graph.d3Force("charge").strength(-220);
+    Graph.d3Force("link").distance(120).strength(0.25);
 
     // Collision force — prevent node overlap
     import("d3-force-3d").then((d3) => {
       if (!graphRef.current) return;
       Graph.d3Force(
         "collision",
-        d3.forceCollide((node) => (node.nodeSize || 5) * 1.1)
+        d3.forceCollide((node) => (node.nodeSize || 5) * 1.4)
       );
     }).catch(() => {
       // d3-force-3d bundled inside 3d-force-graph; if import fails, skip collision
@@ -520,7 +559,7 @@ export default function GraphViewer3D({
         c.y /= cnt;
         c.z /= cnt;
       }
-      const strength = alpha * 0.12;
+      const strength = alpha * 0.05;
       for (const n of graphData.nodes) {
         if (n.clusterId < 0 || n.fx !== undefined) continue;
         const c = centroids.get(n.clusterId);
@@ -528,6 +567,21 @@ export default function GraphViewer3D({
         n.vx = (n.vx || 0) + (c.x - (n.x || 0)) * strength;
         n.vy = (n.vy || 0) + (c.y - (n.y || 0)) * strength;
         n.vz = (n.vz || 0) + (c.z - (n.z || 0)) * strength;
+      }
+    });
+
+    // ── Viewport bounds — keep nodes within a bounding cube ──
+    const BOUNDS = 400;
+    Graph.d3Force("bounds", () => {
+      for (const node of graphData.nodes) {
+        if (node.fx !== undefined) continue;
+        const push = 0.1;
+        if ((node.x || 0) > BOUNDS) node.vx = (node.vx || 0) - ((node.x || 0) - BOUNDS) * push;
+        if ((node.x || 0) < -BOUNDS) node.vx = (node.vx || 0) - ((node.x || 0) + BOUNDS) * push;
+        if ((node.y || 0) > BOUNDS) node.vy = (node.vy || 0) - ((node.y || 0) - BOUNDS) * push;
+        if ((node.y || 0) < -BOUNDS) node.vy = (node.vy || 0) - ((node.y || 0) + BOUNDS) * push;
+        if ((node.z || 0) > BOUNDS) node.vz = (node.vz || 0) - ((node.z || 0) - BOUNDS) * push;
+        if ((node.z || 0) < -BOUNDS) node.vz = (node.vz || 0) - ((node.z || 0) + BOUNDS) * push;
       }
     });
 
@@ -556,8 +610,13 @@ export default function GraphViewer3D({
       scene.add(accentLight);
       sceneExtrasRef.current.push(accentLight);
 
-      // Depth fog
-      scene.fog = new T.FogExp2(0x050816, 0.003);
+      // Depth fog — disabled when reduceAnimations or fogDensity is 0
+      const fogDensity = _reduceAnim ? 0 : _settings.fogDensity;
+      if (fogDensity > 0) {
+        scene.fog = new T.FogExp2(0x050816, fogDensity);
+      } else {
+        scene.fog = null;
+      }
 
       // Starfield background
       const stars = createStarfield(T, 4000, 2000);
@@ -565,95 +624,108 @@ export default function GraphViewer3D({
       sceneExtrasRef.current.push(stars);
     }, 100);
 
-    // Camera initial position
+    // ── Restore or set initial camera position ──
     setTimeout(() => {
-      Graph.cameraPosition({ x: 0, y: 0, z: 250 }, { x: 0, y: 0, z: 0 }, 1000);
-    }, 500);
+      if (cameraStateRef.current) {
+        const saved = cameraStateRef.current;
+        Graph.cameraPosition(
+          { x: saved.x, y: saved.y, z: saved.z },
+          { x: 0, y: 0, z: 0 },
+          0 // instant — no animation
+        );
+      } else {
+        Graph.cameraPosition({ x: 0, y: 0, z: 500 }, { x: 0, y: 0, z: 0 }, 1000);
+      }
+    }, 200);
 
     graphRef.current = Graph;
 
-    // ── Camera auto-orbit ──
+    // ── Camera auto-orbit (disabled when reduceAnimations) ──
     let orbitAngle = 0;
     let userInteracted = false;
     const onInteract = () => { userInteracted = true; };
     container.addEventListener("pointerdown", onInteract);
     container.addEventListener("wheel", onInteract);
 
+    if (!_reduceAnim) {
+      const orbitTick = () => {
+        if (!graphRef.current) return;
+        if (!userInteracted) {
+          orbitAngle += _settings.orbitSpeed;
+          const r = 500;
+          graphRef.current.cameraPosition(
+            { x: r * Math.sin(orbitAngle), y: 50 * Math.sin(orbitAngle * 0.5), z: r * Math.cos(orbitAngle) },
+            { x: 0, y: 0, z: 0 }
+          );
+        }
+        orbitRef.current = requestAnimationFrame(orbitTick);
+      };
+      // Start orbit after layout settles
+      setTimeout(() => {
+        orbitRef.current = requestAnimationFrame(orbitTick);
+      }, 3000);
+    }
+
     // ── WASD keyboard navigation ──
-    const keysHeld = new Set();
-    const MOVE_SPEED = 3;
+    const MOVE_SPEED = 4;
+    const SHIFT_MULTIPLIER = 3;
+
     const onKeyDown = (e) => {
-      const k = e.key.toLowerCase();
-      if (["w","a","s","d","q","e"," ","shift"].includes(k)) {
-        keysHeld.add(k);
-        userInteracted = true;
-        e.preventDefault();
+      const key = e.key.toLowerCase();
+      // Skip when typing in inputs
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (["w", "a", "s", "d", "q", "e", " ", "shift"].includes(key)) {
+        keysRef.current.add(key);
+        if (key === " ") e.preventDefault();
       }
     };
     const onKeyUp = (e) => {
-      keysHeld.delete(e.key.toLowerCase());
+      keysRef.current.delete(e.key.toLowerCase());
     };
-    // Make container focusable & grab focus
-    container.setAttribute("tabindex", "0");
-    container.style.outline = "none";
-    container.addEventListener("keydown", onKeyDown);
-    container.addEventListener("keyup", onKeyUp);
-    container.addEventListener("click", () => container.focus());
-    container.focus();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
 
-    const orbitTick = () => {
-      if (!graphRef.current) return;
+    const wasdTick = () => {
+      if (!graphRef.current) {
+        wasdFrameRef.current = requestAnimationFrame(wasdTick);
+        return;
+      }
+      const keys = keysRef.current;
+      if (keys.size > 0) {
+        userInteracted = true; // Stop orbit
 
-      // WASD movement
-      if (keysHeld.size > 0) {
-        const cam = graphRef.current.camera();
-        if (cam) {
-          const T = window.__THREE__;
-          if (T) {
-            const forward = new T.Vector3();
-            cam.getWorldDirection(forward);
-            const right = new T.Vector3();
-            right.crossVectors(forward, cam.up).normalize();
-            const up = cam.up.clone().normalize();
+        const camera = graphRef.current.camera?.();
+        const T = window.__THREE__;
+        if (camera && T) {
+          const speed = keys.has("shift") ? MOVE_SPEED * SHIFT_MULTIPLIER : MOVE_SPEED;
 
-            const delta = new T.Vector3();
-            if (keysHeld.has("w")) delta.add(forward.clone().multiplyScalar(MOVE_SPEED));
-            if (keysHeld.has("s")) delta.add(forward.clone().multiplyScalar(-MOVE_SPEED));
-            if (keysHeld.has("a")) delta.add(right.clone().multiplyScalar(-MOVE_SPEED));
-            if (keysHeld.has("d")) delta.add(right.clone().multiplyScalar(MOVE_SPEED));
-            if (keysHeld.has(" ")) delta.add(up.clone().multiplyScalar(MOVE_SPEED));
-            if (keysHeld.has("shift")) delta.add(up.clone().multiplyScalar(-MOVE_SPEED));
-            if (keysHeld.has("q")) delta.add(up.clone().multiplyScalar(MOVE_SPEED));
-            if (keysHeld.has("e")) delta.add(up.clone().multiplyScalar(-MOVE_SPEED));
+          const forward = new T.Vector3();
+          camera.getWorldDirection(forward);
+          const right = new T.Vector3();
+          right.crossVectors(forward, camera.up).normalize();
+          const up = new T.Vector3(0, 1, 0);
 
-            if (delta.length() > 0) {
-              const pos = cam.position;
-              graphRef.current.cameraPosition(
-                { x: pos.x + delta.x, y: pos.y + delta.y, z: pos.z + delta.z }
-              );
-            }
-          }
+          const pos = graphRef.current.cameraPosition();
+          let dx = 0, dy = 0, dz = 0;
+
+          if (keys.has("w")) { dx += forward.x * speed; dy += forward.y * speed; dz += forward.z * speed; }
+          if (keys.has("s")) { dx -= forward.x * speed; dy -= forward.y * speed; dz -= forward.z * speed; }
+          if (keys.has("a")) { dx -= right.x * speed; dy -= right.y * speed; dz -= right.z * speed; }
+          if (keys.has("d")) { dx += right.x * speed; dy += right.y * speed; dz += right.z * speed; }
+          if (keys.has("q") || keys.has(" ")) { dx += up.x * speed; dy += up.y * speed; dz += up.z * speed; }
+          if (keys.has("e")) { dx -= up.x * speed; dy -= up.y * speed; dz -= up.z * speed; }
+
+          graphRef.current.cameraPosition(
+            { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz }
+          );
         }
       }
-
-      // Auto orbit when user hasn't interacted
-      if (!userInteracted) {
-        orbitAngle += 0.0008;
-        const r = 250;
-        graphRef.current.cameraPosition(
-          { x: r * Math.sin(orbitAngle), y: 30 * Math.sin(orbitAngle * 0.5), z: r * Math.cos(orbitAngle) },
-          { x: 0, y: 0, z: 0 }
-        );
-      }
-      orbitRef.current = requestAnimationFrame(orbitTick);
+      wasdFrameRef.current = requestAnimationFrame(wasdTick);
     };
-    // Start orbit after layout settles
-    setTimeout(() => {
-      orbitRef.current = requestAnimationFrame(orbitTick);
-    }, 3000);
+    wasdFrameRef.current = requestAnimationFrame(wasdTick);
 
     // ── Temporal animation ──
-    if (animateTime && graphData.links.length > 0) {
+    if (animateTime && graphData.links.length > 0 && !_reduceAnim) {
       const sorted = [...graphData.links].sort((a, b) => a.normalizedTime - b.normalizedTime);
       const DURATION = 8000;
       const start = performance.now();
@@ -678,13 +750,15 @@ export default function GraphViewer3D({
     resizeObs.observe(container);
 
     return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      keysRef.current.clear();
       container.removeEventListener("pointerdown", onInteract);
       container.removeEventListener("wheel", onInteract);
-      container.removeEventListener("keydown", onKeyDown);
-      container.removeEventListener("keyup", onKeyUp);
       resizeObs.disconnect();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (orbitRef.current) cancelAnimationFrame(orbitRef.current);
+      if (wasdFrameRef.current) cancelAnimationFrame(wasdFrameRef.current);
       // Clean up scene extras
       const scene = graphRef.current?.scene?.();
       if (scene) {
@@ -695,7 +769,7 @@ export default function GraphViewer3D({
         graphRef.current = null;
       }
     };
-  }, [ForceGraph3DModule, graphData, onNodeClick, animateTime, layoutMode]);
+  }, [ForceGraph3DModule, graphData, onNodeClick, animateTime, layoutMode, reduceAnimations, settings]);
 
   // ── Legend ──
   const riskGradient =
@@ -714,6 +788,7 @@ export default function GraphViewer3D({
         ref={containerRef}
         className="graph-container-3d"
         style={{ width: "100%", height: "100%" }}
+        tabIndex={0}
       />
 
       {/* Legend */}
@@ -780,15 +855,23 @@ export default function GraphViewer3D({
       {/* Controls hint */}
       <div className="absolute bottom-3 right-3 rounded-lg border border-card-border bg-card/90 px-3 py-2 backdrop-blur-sm">
         <div className="text-[10px] text-muted leading-relaxed">
-          <span className="font-medium text-foreground">Controls:</span>{" "}
+          <span className="font-medium text-foreground">Navigate:</span>{" "}
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">W</kbd>
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">A</kbd>
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">S</kbd>
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">D</kbd>
+          {" "}move ·{" "}
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">Q</kbd>
+          <kbd className="rounded border border-card-border bg-background px-1 py-0.5 text-[9px] font-mono">E</kbd>
+          {" "}up/down
+          <br />
+          <span className="font-medium text-foreground">Mouse:</span>{" "}
           Left-drag rotate · Right-drag pan · Scroll zoom
           <br />
-          <span className="font-medium text-foreground">WASD</span>{" "}
-          move · <span className="font-medium text-foreground">Q/E</span>{" "}
-          up/down · <span className="font-medium text-foreground">Space/Shift</span>{" "}
-          rise/descend
-          <br />
-          <span className="text-[9px] opacity-60">Click graph to enable keyboard · Auto-orbits until interact</span>
+          <span className="text-[9px] opacity-60">
+            Hold <kbd className="rounded border border-card-border bg-background px-0.5 text-[8px] font-mono">Shift</kbd> for
+            faster movement · Space = up
+          </span>
         </div>
       </div>
     </div>
