@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Filter, Route, AlertCircle, Box, Grid2x2, Palette, Timer, Crosshair } from "lucide-react";
+import { Filter, Route, AlertCircle, Box, Grid2x2, Palette, Timer, Crosshair, Zap, Settings } from "lucide-react";
 import GraphViewer from "../components/GraphViewer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { getGraph, getTransactionPath } from "@/lib/api";
@@ -37,6 +37,15 @@ export default function GraphExplorerPage() {
   const [colorMode, setColorMode] = useState("risk"); // "risk" | "cluster"
   const [animateTime, setAnimateTime] = useState(false);
   const [layoutMode, setLayoutMode] = useState("force"); // "force" | "fraud"
+  const [reduceAnimations, setReduceAnimations] = useState(false);
+  const [showVizSettings, setShowVizSettings] = useState(false);
+  const [vizSettings, setVizSettings] = useState({
+    fogDensity: 0.0015,
+    particleSpeed: 0.003,
+    glowIntensity: 1.0,
+    particleCount: 4,
+    orbitSpeed: 0.0008,
+  });
 
   // Path finder
   const [pathFrom, setPathFrom] = useState("");
@@ -229,6 +238,125 @@ export default function GraphExplorerPage() {
               </button>
             </div>
           )}
+
+          {/* Reduce animations toggle (3D mode) */}
+          {viewMode === "3d" && (
+            <div className="flex items-center gap-1.5 border-l border-card-border pl-2">
+              <Zap size={12} className="text-muted" />
+              <button
+                onClick={() => setReduceAnimations(!reduceAnimations)}
+                className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  reduceAnimations
+                    ? "border-green-500 bg-green-500/20 text-green-400"
+                    : "border-card-border bg-background text-muted hover:text-foreground"
+                }`}
+              >
+                {reduceAnimations ? "Lite Mode ✓" : "Lite Mode"}
+              </button>
+            </div>
+          )}
+
+          {/* Visualization settings (3D mode) */}
+          {viewMode === "3d" && (
+            <div className="relative flex items-center gap-1.5 border-l border-card-border pl-2">
+              <Settings size={12} className="text-muted" />
+              <button
+                onClick={() => setShowVizSettings(!showVizSettings)}
+                className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  showVizSettings
+                    ? "border-accent bg-accent/20 text-accent"
+                    : "border-card-border bg-background text-muted hover:text-foreground"
+                }`}
+              >
+                Viz Settings
+              </button>
+              {showVizSettings && (
+                <div className="absolute top-full right-0 z-50 mt-2 w-64 rounded-lg border border-card-border bg-card p-3 shadow-xl backdrop-blur-sm">
+                  <div className="mb-2 text-[11px] font-semibold text-foreground uppercase tracking-wider">
+                    Visualization Settings
+                  </div>
+
+                  {/* Fog Density */}
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted">Fog Density</label>
+                      <span className="text-[10px] font-mono text-muted">{vizSettings.fogDensity.toFixed(4)}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="0.005" step="0.0001"
+                      value={vizSettings.fogDensity}
+                      onChange={(e) => setVizSettings(prev => ({ ...prev, fogDensity: parseFloat(e.target.value) }))}
+                      className="mt-0.5 h-1 w-full cursor-pointer accent-accent"
+                    />
+                  </div>
+
+                  {/* Particle Speed */}
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted">Particle Speed</label>
+                      <span className="text-[10px] font-mono text-muted">{vizSettings.particleSpeed.toFixed(4)}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="0.01" step="0.0005"
+                      value={vizSettings.particleSpeed}
+                      onChange={(e) => setVizSettings(prev => ({ ...prev, particleSpeed: parseFloat(e.target.value) }))}
+                      className="mt-0.5 h-1 w-full cursor-pointer accent-accent"
+                    />
+                  </div>
+
+                  {/* Particle Count */}
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted">Particle Count</label>
+                      <span className="text-[10px] font-mono text-muted">{vizSettings.particleCount}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="10" step="1"
+                      value={vizSettings.particleCount}
+                      onChange={(e) => setVizSettings(prev => ({ ...prev, particleCount: parseInt(e.target.value) }))}
+                      className="mt-0.5 h-1 w-full cursor-pointer accent-accent"
+                    />
+                  </div>
+
+                  {/* Glow Intensity */}
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted">Glow Intensity</label>
+                      <span className="text-[10px] font-mono text-muted">{vizSettings.glowIntensity.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="2" step="0.1"
+                      value={vizSettings.glowIntensity}
+                      onChange={(e) => setVizSettings(prev => ({ ...prev, glowIntensity: parseFloat(e.target.value) }))}
+                      className="mt-0.5 h-1 w-full cursor-pointer accent-accent"
+                    />
+                  </div>
+
+                  {/* Orbit Speed */}
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted">Orbit Speed</label>
+                      <span className="text-[10px] font-mono text-muted">{vizSettings.orbitSpeed.toFixed(4)}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="0.003" step="0.0001"
+                      value={vizSettings.orbitSpeed}
+                      onChange={(e) => setVizSettings(prev => ({ ...prev, orbitSpeed: parseFloat(e.target.value) }))}
+                      className="mt-0.5 h-1 w-full cursor-pointer accent-accent"
+                    />
+                  </div>
+
+                  {/* Reset button */}
+                  <button
+                    onClick={() => setVizSettings({ fogDensity: 0.0015, particleSpeed: 0.003, glowIntensity: 1.0, particleCount: 4, orbitSpeed: 0.0008 })}
+                    className="mt-1 w-full rounded border border-card-border bg-background px-2 py-1 text-[10px] font-medium text-muted hover:text-foreground transition-colors"
+                  >
+                    Reset Defaults
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -291,6 +419,8 @@ export default function GraphExplorerPage() {
               colorMode={colorMode}
               animateTime={animateTime}
               layoutMode={layoutMode}
+              reduceAnimations={reduceAnimations}
+              vizSettings={vizSettings}
               style={{ width: "100%", height: "100%" }}
             />
           ) : (
