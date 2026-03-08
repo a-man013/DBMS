@@ -43,12 +43,17 @@ body {
   font-family: var(--font-sans, Arial, Helvetica, sans-serif);
 }
 
-/* Graph container */
-.graph-container {
+/* 2D Force-Graph container (matches 3D dark theme) */
+.graph-container-2d {
   width: 100%;
   height: 100%;
-  background: var(--card);
+  background: #050816;
   border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.graph-container-2d canvas {
   border-radius: 0.75rem;
 }
 

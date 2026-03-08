@@ -4,8 +4,17 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Filter, Route, AlertCircle, Box, Grid2x2, Palette, Timer, Crosshair, Zap, Settings } from "lucide-react";
-import GraphViewer from "../components/GraphViewer";
 import LoadingSpinner from "../components/LoadingSpinner";
+
+// Dynamic import — force-graph uses canvas/D3 APIs not available server-side
+const GraphViewer = dynamic(() => import("../components/GraphViewer"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center">
+      <LoadingSpinner text="Loading graph..." />
+    </div>
+  ),
+});
 import { getGraph, getTransactionPath, getMyPreferences, saveMyPreferences } from "@/lib/api";
 import { useAuth } from "@/lib/authContext";
 

@@ -310,6 +310,11 @@ export default function GraphViewer3D({
 
       const nodeSize = 3 + Math.sqrt(totalVol) / scaleFactor;
 
+      // Seed initial position on a sphere surface so the simulation starts 3D
+      const seedR = 150 + Math.random() * 150;
+      const seedTheta = Math.random() * Math.PI * 2;
+      const seedPhi = Math.acos(2 * Math.random() - 1);
+
       const node = {
         id: n.data.id,
         label: n.data.label || n.data.id,
@@ -323,7 +328,10 @@ export default function GraphViewer3D({
         color,
         isHighlighted,
         isOnPath,
-        fz: normVol * 300 - 150,
+        // Seed positions — NOT pinned (no fx/fy/fz) so forces can move them freely
+        x: seedR * Math.sin(seedPhi) * Math.cos(seedTheta),
+        y: seedR * Math.sin(seedPhi) * Math.sin(seedTheta),
+        z: seedR * Math.cos(seedPhi),
         nodeSize,
         glowIntensity: normVol,
       };
@@ -407,6 +415,7 @@ export default function GraphViewer3D({
       for (const node of graphData.nodes) {
         delete node.fx;
         delete node.fy;
+        delete node.fz;
       }
     }
 
@@ -564,16 +573,6 @@ export default function GraphViewer3D({
       // d3-force-3d bundled inside 3d-force-graph; if import fails, skip collision
     });
 
-    // Custom Z-force — bias toward log-volume
-    if (layoutMode === "force") {
-      Graph.d3Force("z", (alpha) => {
-        for (const node of graphData.nodes) {
-          if (node.fz !== undefined && node.fx === undefined) {
-            node.vz += (node.fz - (node.z || 0)) * alpha * 0.3;
-          }
-        }
-      });
-    }
 
     // Mild cluster gravity — pull nodes towards cluster centroid
     Graph.d3Force("cluster", (alpha) => {
@@ -608,18 +607,22 @@ export default function GraphViewer3D({
       }
     });
 
-    // ── Viewport bounds — keep nodes within a bounding cube ──
-    const BOUNDS = 400;
+    // ── Spherical bounds — softly keep nodes within a sphere of radius SPHERE_R ──
+    const SPHERE_R = 350;
+    const SPHERE_PUSH = 0.08;
     Graph.d3Force("bounds", () => {
       for (const node of graphData.nodes) {
         if (node.fx !== undefined) continue;
-        const push = 0.1;
-        if ((node.x || 0) > BOUNDS) node.vx = (node.vx || 0) - ((node.x || 0) - BOUNDS) * push;
-        if ((node.x || 0) < -BOUNDS) node.vx = (node.vx || 0) - ((node.x || 0) + BOUNDS) * push;
-        if ((node.y || 0) > BOUNDS) node.vy = (node.vy || 0) - ((node.y || 0) - BOUNDS) * push;
-        if ((node.y || 0) < -BOUNDS) node.vy = (node.vy || 0) - ((node.y || 0) + BOUNDS) * push;
-        if ((node.z || 0) > BOUNDS) node.vz = (node.vz || 0) - ((node.z || 0) - BOUNDS) * push;
-        if ((node.z || 0) < -BOUNDS) node.vz = (node.vz || 0) - ((node.z || 0) + BOUNDS) * push;
+        const nx = node.x || 0;
+        const ny = node.y || 0;
+        const nz = node.z || 0;
+        const dist = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (dist > SPHERE_R && dist > 0) {
+          const over = (dist - SPHERE_R) / dist;
+          node.vx = (node.vx || 0) - nx * over * SPHERE_PUSH;
+          node.vy = (node.vy || 0) - ny * over * SPHERE_PUSH;
+          node.vz = (node.vz || 0) - nz * over * SPHERE_PUSH;
+        }
       }
     });
 

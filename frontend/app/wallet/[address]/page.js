@@ -16,8 +16,13 @@ import {
   Check,
 } from "lucide-react";
 import LoadingSpinner from "../../components/LoadingSpinner";
-import GraphViewer from "../../components/GraphViewer";
 import { getWallet, getGraph } from "@/lib/api";
+
+// Dynamic import — force-graph uses canvas/D3 APIs not available server-side
+const GraphViewer = dynamic(() => import("../../components/GraphViewer"), {
+  ssr: false,
+  loading: () => <LoadingSpinner text="Loading graph..." />,
+});
 
 // Dynamic import — 3d-force-graph uses WebGL and cannot run server-side
 const GraphViewer3D = dynamic(() => import("../../components/GraphViewer3D"), {

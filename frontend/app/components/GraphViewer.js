@@ -1,125 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
-import cytoscape from "cytoscape";
-import cola from "cytoscape-cola";
+import { useEffect, useRef, useMemo, useState } from "react";
 
-// Register the cola layout
-if (typeof window !== "undefined") {
-  cytoscape.use(cola);
-}
+// ── Color utilities (consistent with GraphViewer3D) ──────────────────
 
-// Map risk score (0-100) to a color from green → yellow → red
-function riskColor(score, lightness = 50) {
+function riskColor(score) {
   const s = Math.max(0, Math.min(100, score || 0));
-  // Hue: 280° (purple) → 320° (pink/magenta) → 0° (red)
-  const hue = Math.round(280 - (s / 100) * 280);
-  return `hsl(${hue}, 90%, ${lightness}%)`;
+  return `hsl(${Math.max(0, Math.round(120 - s * 1.2))}, 85%, 60%)`;
 }
 
-const DEFAULT_STYLE = [
-  {
-    selector: "node[nodeType='Wallet']",
-    style: {
-      label: (ele) => {
-        const risk = ele.data("riskScore");
-        const addr = ele.data("label") || ele.data("id");
-        const short = addr.length > 10 ? addr.slice(0, 10) + "…" : addr;
-        return risk != null ? `${short}\n⚠ ${risk}` : short;
-      },
-      "text-valign": "bottom",
-      "text-halign": "center",
-      "font-size": "9px",
-      color: "#a1a1aa",
-      "text-margin-y": 6,
-      "text-max-width": "100px",
-      "text-wrap": "wrap",
-      "text-overflow-wrap": "ellipsis",
-      "background-color": (ele) => riskColor(ele.data("riskScore") || 0),
-      width: 30,
-      height: 30,
-      "border-width": 2,
-      "border-color": (ele) => riskColor(ele.data("riskScore") || 0, 35),
-    },
-  },
-  {
-    selector: "node[nodeType='Coin']",
-    style: {
-      label: "data(label)",
-      "text-valign": "bottom",
-      "text-halign": "center",
-      "font-size": "8px",
-      color: "#a1a1aa",
-      "text-margin-y": 5,
-      "background-color": "#f59e0b",
-      shape: "diamond",
-      width: 22,
-      height: 22,
-      "border-width": 1,
-      "border-color": "#d97706",
-    },
-  },
-  {
-    selector: "node.suspicious",
-    style: {
-      "background-color": "#ef4444",
-      "border-color": "#dc2626",
-      "border-width": 3,
-    },
-  },
-  {
-    selector: "node.highlighted",
-    style: {
-      "background-color": "#c084fc",
-      "border-color": "#a855f7",
-      "border-width": 3,
-    },
-  },
-  {
-    selector: "node:selected",
-    style: {
-      "background-color": "#d8b4fe",
-      "border-color": "#c084fc",
-      "border-width": 3,
-      "box-shadow": "0 0 20px rgba(168, 85, 247, 0.8)",
-    },
-  },
-  {
-    selector: "edge",
-    style: {
-      width: 1.5,
-      "line-color": "#374151",
-      "target-arrow-color": "#374151",
-      "target-arrow-shape": "triangle",
-      "curve-style": "bezier",
-      "arrow-scale": 0.8,
-      label: "data(label)",
-      "font-size": "7px",
-      color: "#6b7280",
-      "text-rotation": "autorotate",
-      "text-margin-y": -8,
-    },
-  },
-  {
-    selector: "edge.highlighted",
-    style: {
-      "line-color": "#a855f7",
-      "target-arrow-color": "#a855f7",
-      width: 3,
-      "z-index": 10,
-    },
-  },
-  {
-    selector: "edge[edgeType='USES']",
-    style: {
-      "line-style": "dashed",
-      "line-color": "#4b5563",
-      "target-arrow-shape": "none",
-      width: 1,
-      label: "",
-    },
-  },
-];
+function clusterColor(clusterId) {
+  return `hsl(${Math.round((clusterId * 137.508) % 360)}, 70%, 55%)`;
+}
+
+const FRAUD_COLORS = {
+  fanout: "hsl(30, 95%, 60%)",
+  fanin: "hsl(280, 80%, 60%)",
+  circular: "hsl(0, 90%, 55%)",
+  hub: "hsl(200, 90%, 65%)",
+  mixer: "hsl(320, 80%, 60%)",
+  normal: null,
+};
+
+/** Convert `hsl(h, s%, l%)` → `hsla(h, s%, l%, alpha)` for canvas gradients. */
+function withAlpha(hslColor, alpha) {
+  return hslColor.replace(/^hsl\(/, "hsla(").replace(/\)$/, `, ${alpha})`);
+}
 
 export default function GraphViewer({
   elements,
@@ -127,163 +33,305 @@ export default function GraphViewer({
   highlightedNodes = [],
   highlightPath = [],
   style,
-  layout = "cola",
 }) {
   const containerRef = useRef(null);
-  const cyRef = useRef(null);
-  const [zoomSpeed, setZoomSpeed] = useState(0.3);
-  const zoomSpeedRef = useRef(zoomSpeed);
+  const graphRef = useRef(null);
+  const [ForceGraphModule, setForceGraphModule] = useState(null);
 
-  // Keep ref in sync with state
+  // Dynamically import force-graph (canvas API — not SSR-compatible).
+  // d3-zoom (used by force-graph) imports {interrupt} from "d3-transition",
+  // which patches Selection.prototype.interrupt as a side effect. Loading
+  // d3-transition explicitly first ensures the patch is definitely applied
+  // before ForceGraph() is called, regardless of bundler evaluation order.
   useEffect(() => {
-    zoomSpeedRef.current = zoomSpeed;
-  }, [zoomSpeed]);
-
-  const handleNodeClick = useCallback(
-    (e) => {
-      const node = e.target;
-      if (onNodeClick && node.data("nodeType") === "Wallet") {
-        onNodeClick(node.data("label") || node.data("id"));
-      }
-    },
-    [onNodeClick]
-  );
-
-  // Initialize Cytoscape
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const cy = cytoscape({
-      container: containerRef.current,
-      style: DEFAULT_STYLE,
-      layout: { name: "grid" },
-      minZoom: 0.1,
-      maxZoom: 5,
-      userZoomingEnabled: false,
+    let cancelled = false;
+    Promise.all([
+      import("d3-transition"),
+      import("force-graph"),
+    ]).then(([, fgMod]) => {
+      if (!cancelled) setForceGraphModule(() => fgMod.default);
     });
+    return () => { cancelled = true; };
+  }, []);
 
-    // Custom wheel zoom using zoomSpeed ref
-    const container = containerRef.current;
-    const handleWheel = (e) => {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? -1 : 1;
-      const factor = Math.pow(1.04, delta * zoomSpeedRef.current * 10);
-      const rect = container.getBoundingClientRect();
-      const pos = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
+  // ── Data transformation (mirrors GraphViewer3D) ──────────────────
+  const graphData = useMemo(() => {
+    if (!elements) return { nodes: [], links: [] };
+
+    const nodeMap = new Map();
+    const nodes = [];
+    const links = [];
+
+    let maxVol = 0;
+    for (const n of elements.nodes || []) {
+      const v = parseFloat(n.data?.totalVolume ?? n.data?.value_lossless ?? 0);
+      if (v > maxVol) maxVol = v;
+    }
+    const scaleFactor = maxVol > 0 ? Math.sqrt(maxVol) / 13 : 1;
+
+    let maxLogAmt = 0;
+    for (const e of elements.edges || []) {
+      const la = parseFloat(e.data?.logAmount ?? 0);
+      if (la > maxLogAmt) maxLogAmt = la;
+    }
+    const edgeWidthScale = maxLogAmt > 0 ? 4 / maxLogAmt : 1;
+
+    for (const n of elements.nodes || []) {
+      const totalVol = parseFloat(n.data?.totalVolume ?? n.data?.value_lossless ?? 0);
+      const logVol = parseFloat(n.data?.logVolume ?? 0);
+      const risk = n.data?.riskScore || 0;
+      const clusterId = n.data?.clusterId ?? -1;
+      const fraudPattern = n.data?.fraudPattern || "normal";
+
+      const isHighlighted =
+        highlightedNodes.includes(n.data.id) || highlightedNodes.includes(n.data.label);
+      const isOnPath =
+        highlightPath.includes(n.data.id) || highlightPath.includes(n.data.label);
+
+      let color;
+      if (isOnPath) color = "hsl(45, 100%, 60%)";
+      else if (isHighlighted) color = "hsl(0, 85%, 55%)";
+      else if (FRAUD_COLORS[fraudPattern]) color = FRAUD_COLORS[fraudPattern];
+      else color = riskColor(risk);
+
+      const rawSize = 4 + Math.sqrt(totalVol) / scaleFactor;
+      const nodeSize = Math.max(4, Math.min(rawSize, 20));
+
+      const node = {
+        id: n.data.id,
+        label: n.data.label || n.data.id,
+        nodeType: n.data.nodeType,
+        totalVolume: totalVol,
+        logVolume: logVol,
+        riskScore: risk,
+        clusterId,
+        fraudPattern,
+        color,
+        isHighlighted,
+        isOnPath,
+        nodeSize,
       };
-      cy.zoom({
-        level: cy.zoom() * factor,
-        renderedPosition: pos,
-      });
-    };
-    container.addEventListener("wheel", handleWheel, { passive: false });
+      nodes.push(node);
+      nodeMap.set(n.data.id, node);
+    }
 
-    cyRef.current = cy;
-    cy.on("tap", "node", handleNodeClick);
+    for (const e of elements.edges || []) {
+      if (!nodeMap.has(e.data.source) || !nodeMap.has(e.data.target)) continue;
+
+      const isPathEdge =
+        highlightPath.length > 1 &&
+        highlightPath.includes(e.data.source) &&
+        highlightPath.includes(e.data.target);
+
+      const logAmt = parseFloat(e.data?.logAmount ?? 0);
+
+      links.push({
+        source: e.data.source,
+        target: e.data.target,
+        edgeType: e.data.edgeType,
+        amount: e.data.amount,
+        coin_type: e.data.coin_type,
+        timestamp: e.data.timestamp,
+        txid: e.data.txid || e.data.id,
+        label: e.data.label,
+        color: isPathEdge ? "rgba(245, 158, 11, 0.8)" : "rgba(100, 120, 160, 0.35)",
+        width: isPathEdge ? 3 : Math.max(0.3, logAmt * edgeWidthScale),
+        isPathEdge,
+      });
+    }
+
+    return { nodes, links };
+  }, [elements, highlightedNodes, highlightPath]);
+
+  // ── Graph init & update ───────────────────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current || !ForceGraphModule) return;
+
+    const container = containerRef.current;
+
+    if (graphRef.current) {
+      graphRef.current._destructor?.();
+      graphRef.current = null;
+      while (container.firstChild) container.removeChild(container.firstChild);
+    }
+
+    const Graph = ForceGraphModule()(container)
+      .backgroundColor("#050816")
+      .width(container.clientWidth)
+      .height(container.clientHeight)
+
+      // ── Custom node canvas rendering ──
+      .nodeCanvasObjectMode(() => "replace")
+      .nodeCanvasObject((node, ctx, globalScale) => {
+        const r = (node.nodeSize || 5) / 2;
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+
+        // Outer glow
+        const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 3.5);
+        grd.addColorStop(0, withAlpha(node.color, 0.35));
+        grd.addColorStop(1, withAlpha(node.color, 0));
+        ctx.beginPath();
+        ctx.arc(x, y, r * 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        // Core circle
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = node.color;
+        ctx.fill();
+
+        // Highlight/path ring
+        if (node.isOnPath || node.isHighlighted) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 2 / globalScale, 0, Math.PI * 2);
+          ctx.strokeStyle = node.isOnPath ? "#f59e0b" : "#ef4444";
+          ctx.lineWidth = 2 / globalScale;
+          ctx.stroke();
+        }
+
+        // Label (visible when zoomed in)
+        if (globalScale >= 1.5) {
+          const label = node.label?.length > 12
+            ? node.label.slice(0, 10) + "\u2026"
+            : node.label;
+          const fontSize = Math.max(6, 10 / globalScale);
+          ctx.font = `${fontSize}px monospace`;
+          ctx.fillStyle = "#a1a1aa";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.fillText(label, x, y + r + 2 / globalScale);
+        }
+      })
+
+      // ── Node tooltip ──
+      .nodeLabel((node) => {
+        const addr =
+          node.label?.length > 20
+            ? node.label.slice(0, 10) + "\u2026" + node.label.slice(-6)
+            : node.label;
+        const vol =
+          node.totalVolume > 1e15
+            ? (node.totalVolume / 1e18).toFixed(4) + " ETH"
+            : node.totalVolume.toLocaleString() + " Wei";
+        const riskHue = Math.max(0, Math.round(120 - (node.riskScore || 0) * 1.2));
+        const patternBadge =
+          node.fraudPattern !== "normal"
+            ? `<div style="margin-top:2px;color:${FRAUD_COLORS[node.fraudPattern] || "#fff"};font-weight:700;">\u26a0 ${node.fraudPattern.toUpperCase()}</div>`
+            : "";
+        return `<div style="background:rgba(5,8,22,0.92);color:#e4e4e7;padding:8px 12px;border-radius:8px;font-size:12px;font-family:monospace;border:1px solid #27272a;pointer-events:none;max-width:300px;">
+          <div style="font-weight:700;margin-bottom:4px;">${addr}</div>
+          <div style="color:#a1a1aa;">Volume: <span style="color:${node.color}">${vol}</span></div>
+          <div style="color:#a1a1aa;">LogVol: <span style="color:#818cf8">${node.logVolume.toFixed(2)}</span></div>
+          <div style="color:#a1a1aa;">Risk: <span style="color:hsl(${riskHue}, 85%, 60%)">${node.riskScore}</span></div>
+          <div style="color:#a1a1aa;">Cluster: <span style="color:${clusterColor(node.clusterId)}">#${node.clusterId}</span></div>
+          ${patternBadge}
+        </div>`;
+      })
+
+      // ── Link styling ──
+      .linkColor((link) => link.color)
+      .linkWidth((link) => link.width)
+      .linkDirectionalArrowLength(6)
+      .linkDirectionalArrowRelPos(1)
+      .linkDirectionalArrowColor((link) => link.color)
+      .linkCurvature(0.15)
+      .linkDirectionalParticles((link) => (link.isPathEdge ? 4 : 1))
+      .linkDirectionalParticleWidth(2)
+      .linkDirectionalParticleSpeed(0.003)
+      .linkDirectionalParticleColor((link) =>
+        link.isPathEdge ? "#f59e0b" : "rgba(140, 160, 210, 0.6)"
+      )
+
+      // ── Link tooltip ──
+      .linkLabel((link) => {
+        const src =
+          typeof link.source === "object"
+            ? link.source.label || link.source.id
+            : link.source;
+        const tgt =
+          typeof link.target === "object"
+            ? link.target.label || link.target.id
+            : link.target;
+        const shortSrc = src?.length > 16 ? src.slice(0, 8) + "\u2026" + src.slice(-6) : src;
+        const shortTgt = tgt?.length > 16 ? tgt.slice(0, 8) + "\u2026" + tgt.slice(-6) : tgt;
+        const amt =
+          link.amount != null
+            ? `${Number(link.amount).toLocaleString()} ${link.coin_type || ""}`.trim()
+            : "\u2014";
+        const ts = link.timestamp
+          ? new Date(link.timestamp).toLocaleString(undefined, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })
+          : null;
+        const txShort =
+          link.txid?.length > 20
+            ? link.txid.slice(0, 10) + "\u2026" + link.txid.slice(-6)
+            : link.txid;
+        const pathBadge = link.isPathEdge
+          ? `<div style="margin-top:4px;color:#f59e0b;font-weight:700;">&#9654; Path edge</div>`
+          : "";
+        return `<div style="background:rgba(5,8,22,0.92);color:#e4e4e7;padding:8px 12px;border-radius:8px;font-size:12px;font-family:monospace;border:1px solid #27272a;pointer-events:none;max-width:320px;">
+          <div style="font-weight:700;margin-bottom:4px;color:#818cf8;">&#8594; Transfer</div>
+          <div style="color:#a1a1aa;">From: <span style="color:#e4e4e7">${shortSrc}</span></div>
+          <div style="color:#a1a1aa;">To: &nbsp;&nbsp;<span style="color:#e4e4e7">${shortTgt}</span></div>
+          <div style="color:#a1a1aa;margin-top:4px;">Amount: <span style="color:#34d399">${amt}</span></div>
+          ${ts ? `<div style="color:#a1a1aa;">Date: <span style="color:#e4e4e7">${ts}</span></div>` : ""}
+          ${txShort ? `<div style="color:#a1a1aa;">TxID: <span style="color:#71717a">${txShort}</span></div>` : ""}
+          ${pathBadge}
+        </div>`;
+      })
+
+      // ── Physics ──
+      .d3AlphaDecay(0.02)
+      .d3VelocityDecay(0.3)
+      .warmupTicks(100)
+      .cooldownTicks(200)
+
+      // ── Interaction ──
+      .onNodeClick((node) => {
+        if (onNodeClick && node.nodeType === "Wallet") {
+          onNodeClick(node.label || node.id);
+        }
+      })
+      .onNodeHover((node) => {
+        container.style.cursor = node ? "pointer" : "default";
+      });
+
+    Graph.d3Force("charge").strength(-200);
+    Graph.d3Force("link").distance(100).strength(0.25);
+
+    Graph.graphData(graphData);
+
+    const resizeObs = new ResizeObserver(() => {
+      if (graphRef.current) {
+        graphRef.current
+          .width(container.clientWidth)
+          .height(container.clientHeight);
+      }
+    });
+    resizeObs.observe(container);
+
+    graphRef.current = Graph;
 
     return () => {
-      container.removeEventListener("wheel", handleWheel);
-      cy.destroy();
-      cyRef.current = null;
+      resizeObs.disconnect();
+      if (graphRef.current) {
+        graphRef.current._destructor?.();
+        graphRef.current = null;
+      }
     };
-  }, [handleNodeClick]);
-
-  // Update elements
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy || !elements) return;
-
-    cy.elements().remove();
-
-    if (elements.nodes?.length > 0 || elements.edges?.length > 0) {
-      const allElements = [
-        ...(elements.nodes || []),
-        ...(elements.edges || []),
-      ];
-      cy.add(allElements);
-
-      const layoutConfig =
-        layout === "cola"
-          ? {
-              name: "cola",
-              animate: true,
-              maxSimulationTime: 500,
-              nodeSpacing: 40,
-              edgeLength: 120,
-              randomize: true,
-              avoidOverlap: true,
-            }
-          : { name: layout, animate: true };
-
-      cy.layout(layoutConfig).run();
-    }
-  }, [elements, layout]);
-
-  // Update highlights
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-
-    cy.elements().removeClass("suspicious highlighted");
-
-    // Mark suspicious nodes
-    if (highlightedNodes.length > 0) {
-      for (const nodeId of highlightedNodes) {
-        const node = cy.getElementById(nodeId);
-        if (node.length) node.addClass("suspicious");
-        // Also try matching by label
-        cy.nodes(`[label = "${nodeId}"]`).addClass("suspicious");
-      }
-    }
-
-    // Mark path
-    if (highlightPath.length > 1) {
-      for (const nodeId of highlightPath) {
-        const node = cy.getElementById(nodeId);
-        if (node.length) node.addClass("highlighted");
-        cy.nodes(`[label = "${nodeId}"]`).addClass("highlighted");
-      }
-
-      // Highlight edges between consecutive path nodes
-      for (let i = 0; i < highlightPath.length - 1; i++) {
-        const sourceId = highlightPath[i];
-        const targetId = highlightPath[i + 1];
-        cy.edges().forEach((edge) => {
-          const s = edge.source();
-          const t = edge.target();
-          if (
-            (s.id() === sourceId || s.data("label") === sourceId) &&
-            (t.id() === targetId || t.data("label") === targetId)
-          ) {
-            edge.addClass("highlighted");
-          }
-        });
-      }
-    }
-  }, [highlightedNodes, highlightPath]);
+  }, [ForceGraphModule, graphData, onNodeClick]);
 
   return (
     <div className="relative" style={style}>
       <div
         ref={containerRef}
-        className="graph-container"
+        className="graph-container-2d"
         style={{ width: "100%", height: "100%" }}
       />
-      <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-lg border border-card-border bg-card/90 px-3 py-2 backdrop-blur-sm">
-        <span className="text-[10px] text-muted">Zoom</span>
-        <input
-          type="range"
-          min="0.05"
-          max="1"
-          step="0.05"
-          value={zoomSpeed}
-          onChange={(e) => setZoomSpeed(parseFloat(e.target.value))}
-          className="h-1 w-20 cursor-pointer accent-accent"
-        />
-        <span className="w-7 text-right text-[10px] font-mono text-muted">{zoomSpeed.toFixed(2)}</span>
-      </div>
     </div>
   );
 }
