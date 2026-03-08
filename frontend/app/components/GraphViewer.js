@@ -300,8 +300,31 @@ export default function GraphViewer({
         container.style.cursor = node ? "pointer" : "default";
       });
 
-    Graph.d3Force("charge").strength(-200);
-    Graph.d3Force("link").distance(100).strength(0.25);
+    // Middle-click: open wallet in new tab
+    const handleAuxClick = (e) => {
+      if (e.button !== 1 || !graphRef.current) return;
+      e.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+      const graphCoords = graphRef.current.screen2GraphCoords(offsetX, offsetY);
+      const nodes = graphRef.current.graphData().nodes;
+      let closest = null;
+      let minDist = Infinity;
+      for (const n of nodes) {
+        const dx = (n.x ?? 0) - graphCoords.x;
+        const dy = (n.y ?? 0) - graphCoords.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDist) { minDist = dist; closest = n; }
+      }
+      if (closest && closest.nodeType === "Wallet" && minDist < (closest.nodeSize || 5) * 3) {
+        window.open(`/wallet/${encodeURIComponent(closest.label || closest.id)}`, "_blank", "noopener,noreferrer");
+      }
+    };
+    container.addEventListener("auxclick", handleAuxClick);
+
+    Graph.d3Force("charge").strength(-80);
+    Graph.d3Force("link").distance(50).strength(0.6);
 
     Graph.graphData(graphData);
 
@@ -317,6 +340,7 @@ export default function GraphViewer({
     graphRef.current = Graph;
 
     return () => {
+      container.removeEventListener("auxclick", handleAuxClick);
       resizeObs.disconnect();
       if (graphRef.current) {
         graphRef.current._destructor?.();

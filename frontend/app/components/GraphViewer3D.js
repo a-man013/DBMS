@@ -220,6 +220,7 @@ export default function GraphViewer3D({
   const cameraStateRef = useRef(null); // preserve camera across graph recreation
   const userInteractedRef = useRef(false); // persists across graph recreation — prevents orbit restart
   const settingsRef = useRef(null); // always-current settings for RAF closures
+  const hoveredNodeRef = useRef(null); // tracks hovered node for middle-click
   const [ForceGraph3DModule, setForceGraph3DModule] = useState(null);
 
   // ── Merged visual settings with defaults ──
@@ -555,8 +556,20 @@ export default function GraphViewer3D({
       })
       .onNodeHover((node) => {
         container.style.cursor = node ? "pointer" : "default";
+        hoveredNodeRef.current = node || null;
       })
       .enableNodeDrag(false); // drag only when Ctrl is held
+
+    // Middle-click: open wallet in new tab
+    const handleAuxClick = (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      const node = hoveredNodeRef.current;
+      if (node && node.nodeType === "Wallet") {
+        window.open(`/wallet/${encodeURIComponent(node.label || node.id)}`, "_blank", "noopener,noreferrer");
+      }
+    };
+    container.addEventListener("auxclick", handleAuxClick);
 
     // ── Improved physics forces ──
     Graph.d3Force("charge").strength(-220);
@@ -833,6 +846,7 @@ export default function GraphViewer3D({
       keysRef.current.clear();
       container.removeEventListener("pointerdown", onInteract);
       container.removeEventListener("wheel", onInteract);
+      container.removeEventListener("auxclick", handleAuxClick);
       resizeObs.disconnect();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (orbitRef.current) cancelAnimationFrame(orbitRef.current);

@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 import LoadingSpinner from "../components/LoadingSpinner";
 import SearchBar from "../components/SearchBar";
-import { getSuspicious } from "@/lib/api";
+import { getSuspicious, getRiskRanking } from "@/lib/api";
+import { TrendingUp } from "lucide-react";
 
 const DETECTION_TYPES = [
   {
@@ -48,12 +49,19 @@ const DETECTION_TYPES = [
     icon: AlertTriangle,
     description: "Wallets with both high fan-in and fan-out",
   },
+  {
+    key: "risk_ranking",
+    label: "Risk Ranking",
+    icon: TrendingUp,
+    description: "All wallets ranked from highest to lowest computed risk score",
+  },
 ];
 
 export default function SuspiciousPage() {
   const router = useRouter();
   const [activeType, setActiveType] = useState("circular");
   const [results, setResults] = useState([]);
+  const [rankingData, setRankingData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [threshold, setThreshold] = useState(3);
@@ -61,10 +69,17 @@ export default function SuspiciousPage() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    getSuspicious({ type: activeType, threshold, limit: 30 })
-      .then((data) => setResults(data.suspiciousWallets || []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    if (activeType === "risk_ranking") {
+      getRiskRanking({ limit: 100 })
+        .then((data) => setRankingData(data.wallets || []))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    } else {
+      getSuspicious({ type: activeType, threshold, limit: 30 })
+        .then((data) => setResults(data.suspiciousWallets || []))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    }
   }, [activeType, threshold]);
 
   return (
@@ -131,6 +146,76 @@ export default function SuspiciousPage() {
         <div className="rounded-lg border border-danger/30 bg-danger/5 p-4">
           <p className="text-sm text-danger">{error}</p>
         </div>
+      ) : activeType === "risk_ranking" ? (
+        rankingData.length === 0 ? (
+          <div className="rounded-lg border border-card-border bg-card p-8 text-center">
+            <p className="text-sm text-muted">No wallet risk data available</p>
+            <p className="mt-1 text-xs text-muted">Upload transaction data to compute risk scores</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-card-border">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Wallet</th>
+                  <th>Risk Score</th>
+                  <th>Fan-Out</th>
+                  <th>Fan-In</th>
+                  <th>Cycles</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankingData.map((item, i) => {
+                  const risk = item.riskScore;
+                  const riskHue = Math.max(0, Math.round(120 - risk * 1.2));
+                  const riskColor = `hsl(${riskHue}, 85%, 60%)`;
+                  return (
+                    <tr key={i}>
+                      <td className="text-xs text-muted font-bold">{i + 1}</td>
+                      <td><WalletLink address={item.address} router={router} /></td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-1.5 rounded-full"
+                            style={{
+                              width: `${Math.max(4, risk)}%`,
+                              maxWidth: "80px",
+                              backgroundColor: riskColor,
+                            }}
+                          />
+                          <span className="font-mono text-xs font-bold" style={{ color: riskColor }}>
+                            {risk}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="font-mono text-xs">{item.outDegree}</td>
+                      <td className="font-mono text-xs">{item.inDegree}</td>
+                      <td className="font-mono text-xs">{item.cycles}</td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => router.push(`/wallet/${encodeURIComponent(item.address)}`)}
+                            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-accent hover:bg-accent/10"
+                          >
+                            <Eye size={12} /> Inspect
+                          </button>
+                          <button
+                            onClick={() => router.push(`/graph?address=${encodeURIComponent(item.address)}`)}
+                            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-warning hover:bg-warning/10"
+                          >
+                            <RefreshCw size={12} /> Visualize
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
       ) : results.length === 0 ? (
         <div className="rounded-lg border border-card-border bg-card p-8 text-center">
           <p className="text-sm text-muted">

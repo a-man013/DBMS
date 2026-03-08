@@ -169,6 +169,10 @@ export async function getSuspicious({ type = 'circular', threshold = 5, limit = 
   return cached(`suspicious:${qs}`, () => request(`/suspicious?${qs}`), TTL_SUSPICIOUS);
 }
 
+export async function getRiskRanking({ limit = 50 } = {}) {
+  return cached(`risk-ranking:${limit}`, () => request(`/suspicious/risk-ranking?limit=${limit}`), TTL_SUSPICIOUS);
+}
+
 export async function getMyPreferences() {
   return request('/users/me/preferences');
 }
