@@ -21,10 +21,10 @@ import {
   Globe,
 } from "lucide-react";
 
-// ═══════════════════════════════════════════════════════════════════════
-// Animated Network Canvas (background)
-// ═══════════════════════════════════════════════════════════════════════
+import CyberNetworkCanvas from "./CyberNetworkCanvas";
 
+// Legacy NetworkCanvas replaced by CyberNetworkCanvas
+/*
 function NetworkCanvas({ className }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
@@ -217,6 +217,7 @@ function NetworkCanvas({ className }) {
     />
   );
 }
+*/
 
 // ═══════════════════════════════════════════════════════════════════════
 // Terminal typing animation
@@ -582,6 +583,11 @@ export default function LandingPage() {
 
   return (
     <div className="landing-root">
+      {/* ════════════ Full-screen cyber network background ════════════ */}
+      <div className="cyber-network-bg" aria-hidden="true">
+        <CyberNetworkCanvas />
+      </div>
+
       <ScanlineOverlay />
 
       {/* ════════════════════ NAV ════════════════════ */}
@@ -627,11 +633,10 @@ export default function LandingPage() {
 
       {/* ════════════════════ HERO ════════════════════ */}
       <section className="landing-hero">
-        {/* Background network canvas */}
+        {/* Background overlay — network is now global behind the page */}
         <div className="absolute inset-0 z-0">
-          <NetworkCanvas className="absolute inset-0 opacity-40" />
-          {/* Radial gradient overlay */}
-          <div className="absolute inset-0 bg-linear-to-b from-transparent via-[#0a0a0f]/60 to-[#0a0a0f]" />
+          {/* Radial gradient overlay for readability */}
+          <div className="absolute inset-0 bg-linear-to-b from-transparent via-[#000000]/30 to-[#000000]/70" />
           {/* Grid overlay */}
           <div className="landing-grid-overlay" />
         </div>
@@ -647,12 +652,12 @@ export default function LandingPage() {
 
           {/* Headline */}
           <h1 className="landing-hero-title">
-            <span className="landing-glitch" data-text="Advanced Blockchain">
-              Advanced Blockchain
+            <span className="landing-glitch" data-text="Distributed Blockchain">
+              Distributed Blockchain
             </span>
             <br />
             <span className="landing-hero-accent">
-              Transaction Intelligence
+              Monitoring System
             </span>
           </h1>
 
